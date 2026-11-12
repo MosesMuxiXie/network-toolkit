@@ -102,6 +102,8 @@ foreach ($sub in @('gui', 'steam-community', 'mac')) {
 }
 Say ('已复制 ' + $script:copied + ' 个文件') 'Green'
 
+
+
 # 卸载脚本一并放入安装目录
 $instDir = Join-Path $Dest 'installer'
 New-Item -ItemType Directory -Force -Path $instDir | Out-Null
@@ -174,8 +176,15 @@ if ($StartNow) {
     if (-not $SkipCaddy -and (Test-Path $steamPs) -and (Test-Path $caddy)) {
         Say ''
         Say '正在开启 Steam 社区直连 ...' 'Cyan'
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $steamPs -EnableQuiet
-        if ($LASTEXITCODE -ne 0) { Say '开启过程有报错，可双击桌面图标进图形界面查看' 'Yellow' }
+        $sp = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-File", $steamPs, "-EnableQuiet") -PassThru -WindowStyle Hidden
+        $ok = $false
+        for ($wait = 0; $wait -lt 60; $wait++) {
+            Start-Sleep -Milliseconds 500
+            if (@(Get-NetTCPConnection -LocalPort 443 -State Listen -ErrorAction SilentlyContinue).Count -gt 0) { $ok = $true; break }
+            if ($sp.HasExited -and $wait -gt 10) { break }
+        }
+        if ($ok) { Say "Steam 社区反代已开启（443 已监听）" "Green" }
+        else    { Say "未确认开启成功，可双击桌面「Steam 社区直连」查看日志" "Yellow" }
     } else {
         Say '未开启 Steam 反代（缺少 caddy.exe 或用了 -SkipCaddy）' 'Yellow'
     }
