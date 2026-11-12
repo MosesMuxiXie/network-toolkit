@@ -80,7 +80,7 @@ function Get-ProxyStatus {
     $listening = @(Get-NetTCPConnection -LocalPort 443 -State Listen -ErrorAction SilentlyContinue).Count -gt 0
     $hostsOn = $false
     if (Test-Path $script:HostsFile) {
-        $raw = Get-Content -LiteralPath $script:HostsFile -Raw -ErrorAction SilentlyContinue
+        try { $raw = [IO.File]::ReadAllText($script:HostsFile, [Text.Encoding]::Default) } catch { $raw = "" }
         if ($null -ne $raw) {
             foreach ($d in $script:Domains) {
                 if ($raw -match ('(?m)^\s*127\.0\.0\.1\s+' + [regex]::Escape($d) + '\s*$')) { $hostsOn = $true }
@@ -288,7 +288,7 @@ function Write-HostsFile {
 function Set-HostsOn {
     $raw = ""
     if (Test-Path $script:HostsFile) {
-        $raw = Get-Content -LiteralPath $script:HostsFile -Raw -ErrorAction SilentlyContinue
+        try { $raw = [IO.File]::ReadAllText($script:HostsFile, [Text.Encoding]::Default) } catch { $raw = "" }
     }
     if ($null -eq $raw) { $raw = "" }
 
@@ -312,7 +312,7 @@ function Set-HostsOn {
 
 function Set-HostsOff {
     if (-not (Test-Path $script:HostsFile)) { return }
-    $raw = Get-Content -LiteralPath $script:HostsFile -Raw -ErrorAction SilentlyContinue
+    try { $raw = [IO.File]::ReadAllText($script:HostsFile, [Text.Encoding]::Default) } catch { $raw = "" }
     if ($null -eq $raw) { return }
     $orig = $raw
     $raw = [regex]::Replace($raw, '(?ms)^' + [regex]::Escape($script:BeginMark) + '.*?' + [regex]::Escape($script:EndMark) + '\s*\r?\n?', '')
@@ -565,7 +565,7 @@ if ($Test -or $EnableQuiet -or $DisableQuiet) {
     if ($Test)             { Invoke-SelfTest }
     elseif ($EnableQuiet)  { Invoke-Enable }
     elseif ($DisableQuiet) { Invoke-Disable }
-    exit 0
+    [Environment]::Exit(0)
 }
 
 # ==================== 界面 ====================
