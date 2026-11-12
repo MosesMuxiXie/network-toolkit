@@ -1,8 +1,8 @@
-﻿{
+{
 	admin off
 }
 
-https://steamcommunity.com {
+(steamcommunity) {
 	tls internal
 	reverse_proxy https://steampowered.com:443 {
 		header_up Host steamcommunity.com
@@ -15,4 +15,12 @@ https://steamcommunity.com {
 		output file access.log
 		format json
 	}
+}
+
+https://steamcommunity.com {
+	import steamcommunity
+}
+
+https://www.steamcommunity.com {
+	import steamcommunity
 }

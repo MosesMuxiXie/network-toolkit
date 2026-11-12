@@ -178,6 +178,9 @@ function Start-CaddyService {
         foreach ($k in @("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy","NO_PROXY","no_proxy","ALL_PROXY","all_proxy")) {
             try { $psi.EnvironmentVariables.Remove($k) } catch { }
         }
+        # Go 的 http.ProxyFromEnvironment 会读 HTTPS_PROXY；Clash 关闭后 7897 无监听会导致 502
+        $psi.EnvironmentVariables["NO_PROXY"] = "*"
+        $psi.EnvironmentVariables["no_proxy"] = "*"
         $proc = [System.Diagnostics.Process]::Start($psi)
         Log ("已启动 Caddy (PID " + $proc.Id + ")，等待就绪 ...") "Cyan"
 
@@ -343,7 +346,7 @@ function Register-Autostart {
         }
         $existing = Get-ScheduledTask -TaskName $script:TaskName -ErrorAction SilentlyContinue
         if ($existing) { Log ("自启任务已存在（" + $existing.State + "）") "Gray"; return }
-        $inner = 'cd /d "' + $script:Root + '" && "' + $script:CaddyExe + '" run --config "' + $script:Caddyfile + '"'
+        $inner = 'set "HTTP_PROXY=" & set "HTTPS_PROXY=" & set "ALL_PROXY=" & set "http_proxy=" & set "https_proxy=" & set "all_proxy=" & set "NO_PROXY=*" & set "no_proxy=*" & cd /d "' + $script:Root + '" && "' + $script:CaddyExe + '" run --config "' + $script:Caddyfile + '"'
         $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument ('/c ' + $inner)
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
