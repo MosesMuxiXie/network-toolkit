@@ -45,15 +45,32 @@ function Get-Candidates {
     return $all | Sort-Object @{ Expression = 'Net'; Descending = $true }, ProcessName
 }
 
+$SupportFull = @('chrome', 'msedge', 'firefox', 'brave', 'opera', 'vivaldi', 'curl', 'aria2c', 'wget', 'powershell', 'pwsh', 'python', 'python3', 'node', 'git', '7z', 'idman', 'qbittorrent', 'transmission', 'fdm', 'discord', 'telegram', 'code', 'vscode')
+$SupportPartial = @('thunder', 'xunlei', 'weixin', 'wechat', 'qq', 'baidunetdisk', 'quark', 'aliyundrive', 'dingtalk', 'feishu', 'wps')
+$SupportNone = @('steam', 'steamwebhelper', 'epicgameslauncher', 'battle.net', 'battlenet', 'origin', 'eadesktop', 'ubisoftconnect', 'uplay', 'uu', 'xunyou', 'wegame', 'riotclient', 'leagueclient', 'msiexec')
+
+function Get-Support([string]$procName) {
+    $n = $procName.ToLowerInvariant()
+    if ($SupportFull -contains $n) { return [pscustomobject]@{ Mark = '[支持]'; Text = '认代理 + 可多连接，能吃到双线' } }
+    if ($SupportPartial -contains $n) { return [pscustomobject]@{ Mark = '[部分]'; Text = '看版本或只认系统代理，需实测' } }
+    if ($SupportNone -contains $n) { return [pscustomobject]@{ Mark = '[不支持]'; Text = '不认代理，需 /32 路由或双 WAN' } }
+    return [pscustomobject]@{ Mark = '[未知]'; Text = '多半不认代理，需实测' }
+}
+
 function Show-Candidates($cands) {
     $i = 0
     foreach ($c in $cands) {
         $i++
         $mark = if ($c.Net) { '●' } else { '○' }
+        $sup = Get-Support $c.ProcessName
+        $name = $c.ProcessName
+        if ($name.Length -gt 20) { $name = $name.Substring(0, 20) }
         $title = $c.MainWindowTitle
-        if ($title.Length -gt 40) { $title = $title.Substring(0, 40) + '...' }
-        Write-Host ("  [{0,2}] {1} {2,-24} PID={3,-7} {4}" -f $i, $mark, $c.ProcessName, $c.Id, $title)
+        if ($title.Length -gt 34) { $title = $title.Substring(0, 34) + '...' }
+        Write-Host ("  [{0,2}] {1} {2,-20} PID={3,-7} {4,-6} {5}" -f $i, $mark, $name, $c.Id, $sup.Mark, $title)
     }
+    Write-Host ""
+    Write-Host "  支持度: [支持] 认代理+多连接 → 能吃到双线 | [部分] 看版本/只认系统代理 | [不支持] 不认代理（需路由或双 WAN） | [未知] 多半不认"
 }
 
 function Start-AppProxied($proc) {
@@ -85,7 +102,7 @@ if ($Stop) { Stop-Proxy; return }
 
 $cands = @(Get-Candidates)
 if ($List -or $ProcId -eq 0) {
-    Write-Host "带窗口且（● 已联网 / ○ 未联网）的进程："
+    Write-Host "带窗口且联网的进程（● 已联网 / ○ 未联网，附支持度）："
     Show-Candidates $cands
     if ($List) { return }
     $sel = Read-Host "输入编号选择要代理的软件（回车取消）"
@@ -108,8 +125,15 @@ if (-not $target.Path -or -not (Test-Path $target.Path)) {
     throw "拿不到可执行文件路径，无法以代理环境重启"
 }
 
-Start-Proxy
+$sup = Get-Support $target.ProcessName
+Write-Host ("支持度: {0} {1}" -f $sup.Mark, $sup.Text)
+if ($sup.Mark -eq '[不支持]' -or $sup.Mark -eq '[未知]') {
+    Write-Host "注意：这类软件通常不认代理，用本方式分流不会生效（Steam、游戏启动器尤其如此）。"
+    $go = Read-Host "仍要以代理环境启动？(y/N)"
+    if ($go -notmatch '^[Yy]') { Write-Host "已取消。"; return }
+}
 
+Start-Proxy
 $running = Get-Process -Id $target.Id -ErrorAction SilentlyContinue
 if ($running) {
     Write-Host "该进程正在运行，需要先退出才能应用代理环境。"

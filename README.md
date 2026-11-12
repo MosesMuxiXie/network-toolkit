@@ -54,6 +54,18 @@ powershell -ExecutionPolicy Bypass -File .\dl.ps1 -Url https://example.com/big.i
 自检通过
 ```
 
+## 软件支持度
+
+`app-split` 在列出进程时会同时标注这个软件能不能用本方式提速：
+
+| 标记 | 含义 | 典型软件 |
+| --- | --- | --- |
+| `[支持]` | 认代理 + 可多连接，能吃到双线 | Chrome / Edge / Firefox、curl、aria2、IDM、qBittorrent、Electron 应用 |
+| `[部分]` | 看版本或只认系统代理，需实测 | 微信、QQ、迅雷、百度网盘、钉钉 |
+| `[不支持]` | 不认代理，需 `/32` 路由或双 WAN | Steam、Epic、战网、UU 加速器、游戏启动器、msiexec |
+| `[未知]` | 不在名单里，多半不认代理 | 大多数安装包和临时程序 |
+
+选中 `[不支持]` 或 `[未知]` 的软件时会先给出提示，确认后才会启动。
 ## 实测参考
 
 同一台机器、校园网 Wi-Fi + 手机 USB 共享：
