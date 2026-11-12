@@ -295,6 +295,34 @@ public class SplitProxy
 
 Add-Type -TypeDefinition $code -Language CSharp
 
+function ConvertTo-IPv4Number([string]$ip) {
+    $b = [System.Net.IPAddress]::Parse($ip).GetAddressBytes()
+    return (([uint64]$b[0] * 16777216) + ([uint64]$b[1] * 65536) + ([uint64]$b[2] * 256) + [uint64]$b[3])
+}
+
+function Get-CidrMask([int]$bits) {
+    if ($bits -le 0) { return [uint64]0 }
+    return ([uint64]4294967295 - ([uint64]1 -shl (32 - $bits)) + 1)
+}
+
+function Get-EgressKind([string]$ip) {
+    # 用网段判断这张网卡的流量最终从哪出去，避免把蜂窝链路当成校园网链路
+    $u = ConvertTo-IPv4Number $ip
+    $map = @(
+        @('10.66.80.0', 21, '校园网'),
+        @('172.20.10.0', 28, 'iPhone蜂窝'),
+        @('192.168.42.0', 24, '手机共享'),
+        @('192.168.43.0', 24, '手机共享'),
+        @('192.168.49.0', 24, '手机共享'),
+        @('192.168.137.0', 24, 'ICS共享')
+    )
+    foreach ($m in $map) {
+        $mask = Get-CidrMask ([int]$m[1])
+        if (($u -band $mask) -eq ((ConvertTo-IPv4Number $m[0]) -band $mask)) { return [string]$m[2] }
+    }
+    return '其他'
+}
+
 function Get-LinkCandidates {
     $out = @()
     foreach ($ad in (Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })) {
@@ -315,17 +343,19 @@ function Get-LinkCandidates {
             Gateway     = $gw.NextHop
             Metric      = [int]$gw.InterfaceMetric
             Virtual     = $isVirtual
+            Egress      = Get-EgressKind $ip.IPAddress
         }
     }
     return @($out | Sort-Object Virtual, Metric, Name)
 }
 
 function Show-Links($links) {
+    Write-Host "  出口：校园网=10.66.80.0/21  iPhone蜂窝=172.20.10.0/28  手机共享=192.168.42/43/49.0/24  ICS=192.168.137.0/24"
     $i = 0
     foreach ($x in $links) {
         $i++
         $tag = if ($x.Virtual) { '虚拟' } else { '物理' }
-        Write-Host ("  [{0}] {1,-22} {2,-12} 网关 {3,-15} 度量 {4,-5} {5}" -f $i, $x.Name, $x.IP, $x.Gateway, $x.Metric, $tag)
+        Write-Host ("  [{0}] {1,-22} {2,-12} 网关 {3,-15} 度量 {4,-5} {5} | 出口 {6}" -f $i, $x.Name, $x.IP, $x.Gateway, $x.Metric, $tag, $x.Egress)
     }
 }
 
