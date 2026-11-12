@@ -30,8 +30,17 @@ $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 try { Add-Type -AssemblyName System.Net.Http -ErrorAction Stop } catch {}
 $MB = 1MB
+
+# Windows PowerShell 5.1：进程环境里若同时存在 NO_PROXY / no_proxy 这类仅大小写不同的键，
+# Start-Process 会抛 "Item has already been added. Key in dictionary: 'NO_PROXY'"。
+# 先清掉代理环境变量，避免并发段起不来；需要代理时用 -Proxy 显式指定。
+foreach ($n in 'http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY', 'no_proxy', 'NO_PROXY') {
+    try { [Environment]::SetEnvironmentVariable($n, $null, 'Process') } catch {}
+}
+
 $proxyArgs = @()
 if ($Proxy -ne '') { $proxyArgs = @('--proxy', $Proxy) }
+else { $proxyArgs = @('--noproxy', '*') }   # 不带 -Proxy 就真直连，忽略继承来的系统代理
 
 # ---- 1. 探查目标：长度 + 是否支持 Range ----
 $probe = curl.exe -sIL --max-time 25 @proxyArgs $Url
