@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# 二进制（安装时按需下载）
+**/caddy.exe
+
+# 运行时产物
+*.log
+**/access.log
+hosts.bak.*
