@@ -83,6 +83,64 @@ powershell -ExecutionPolicy Bypass -File .\gui\AdaptersGUI.ps1 -StopQuiet
 - 两条**物理**且**出口不同**的链路（例如 校园网 Wi-Fi + 手机 USB 共享）
 - 手机必须是 **USB 共享**；「手机开 Wi-Fi 热点让电脑连」不行 —— 一块无线网卡不能同时关联两个 Wi-Fi
 
+### 快速开始
+
+双击 `app-split.bat` → 自动自检 → 输入编号选择要分流的软件。
+
+命令行方式：
+
+```powershell
+# 查看当前可用链路
+powershell -ExecutionPolicy Bypass -File .\split-proxy.ps1 -List
+
+# 链路自检（每条链路下载 500 KB，通过返回 0，失败返回 1）
+powershell -ExecutionPolicy Bypass -File .\split-proxy.ps1 -Probe
+
+# 双线下载
+powershell -ExecutionPolicy Bypass -File .\dl.ps1 -Url https://example.com/big.iso -Threads 16
+```
+
+自检输出示例：
+
+```
+自检目标: mirrors.tuna.tsinghua.edu.cn (101.6.15.130)，每条约 500 KB
+  [主] WLAN        10.66.81.134 ... 连接  145 ms | 下载  0.51 MB/s | OK
+  [副] 以太网 2     192.168.0.2  ... 连接  191 ms | 下载  0.50 MB/s | OK
+自检通过
+```
+
+### 软件支持度与验证
+
+#### 列表里的标记
+
+| 标记 | 来源 | 含义 |
+| --- | --- | --- |
+| `[支持]` / `[部分]` / `[不支持]` | 内置名单 | 已人工确认过的常见软件 |
+| `[支持*]` | 静态扫描 | EXE 导入了 `winhttp`/`wininet`/`libcurl`，或属于 Electron/Chromium/CEF |
+| `[很可能*]` | 静态扫描 | Qt Network 程序，通常跟随系统代理 |
+| `[未知*]` | 静态扫描 | 只看到 `ws2_32`，或读不到导入表（加壳/动态加载） |
+| `[不支持*]` | 静态扫描 | 没有网络导入表 |
+
+带 `*` 的只是静态推断，不代表一定能用。
+
+#### 启动后实测（自动）
+
+选好软件并启动后，脚本会观察 12 秒：
+
+- 统计经过代理端口的连接峰值——有连接说明它确实走了代理；
+- 同时统计两条网卡各自的峰值速率——两边都有流量才算真的双线。
+
+```
+正在观察 12 秒：确认是否真的走代理、两条链路是否都在动 ...
+  实测：经代理的连接峰值 8 条 → 该软件确实走了代理
+  WLAN: 峰值 212.6 Mbps
+  以太网 2: 峰值 24.7 Mbps
+```
+
+也可以手动触发：`app-split.ps1 -Verify -Port 1080`。
+
+> 当检测到 DNS 返回 `198.18.x`（Clash TUN 的 fake-IP）时，代理会用 DoH 重新解析真实 IP，避免连到假地址。
+
 ### 实测参考
 
 同一台机器、校园网 Wi-Fi + 手机 USB 共享：
