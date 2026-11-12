@@ -115,6 +115,11 @@ write_plist() {
   <key>WorkingDirectory</key><string>$ROOT</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NO_PROXY</key><string>*</string>
+    <key>no_proxy</key><string>*</string>
+  </dict>
   <key>StandardOutPath</key><string>$STDOUT_LOG</string>
   <key>StandardErrorPath</key><string>$STDOUT_LOG</string>
 </dict>
@@ -135,7 +140,7 @@ start_caddy() {
     return 0
   fi
   log "启动 Caddy…"
-  ( cd "$ROOT" && nohup "$CADDY" run --config "$CADDYFILE" >>"$STDOUT_LOG" 2>&1 & )
+  ( cd "$ROOT" && env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy NO_PROXY='*' no_proxy='*' nohup "$CADDY" run --config "$CADDYFILE" >>"$STDOUT_LOG" 2>&1 & )
   for _ in $(seq 1 40); do
     sleep 0.4
     if port_open; then
