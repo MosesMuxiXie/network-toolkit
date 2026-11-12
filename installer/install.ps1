@@ -100,8 +100,8 @@ foreach ($sub in @('gui', 'steam-community', 'mac')) {
         $script:copied++
     }
 }
-Say ('已复制 ' + $script:copied + ' 个文件') 'Green'
-
+Say ('已复制 ' + $script:copied + ' 个文件') 'Green'
+
 # 卸载脚本一并放入安装目录
 $instDir = Join-Path $Dest 'installer'
 New-Item -ItemType Directory -Force -Path $instDir | Out-Null
