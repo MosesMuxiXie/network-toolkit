@@ -13,6 +13,7 @@ using System;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Net.Http;
 using System.Text;
 using System.Threading;
 
@@ -100,6 +101,38 @@ public class SplitProxy
         Copy(cl, up);
     }
 
+    private static bool IsFakeIp(IPAddress ip)
+    {
+        byte[] b = ip.GetAddressBytes();
+        return b.Length == 4 && b[0] == 198 && (b[1] == 18 || b[1] == 19);
+    }
+
+    private static string ResolveReal(string host)
+    {
+        try
+        {
+            string url = "https://dns.alidns.com/resolve?name=" + Uri.EscapeDataString(host) + "&type=A";
+            using (HttpClient hc = new HttpClient())
+            {
+                hc.Timeout = TimeSpan.FromSeconds(6);
+                string json = hc.GetStringAsync(url).Result;
+                int i = 0;
+                while ((i = json.IndexOf("\"data\":\"", i)) >= 0)
+                {
+                    i += 8;
+                    int j = json.IndexOf('"', i);
+                    if (j <= i) break;
+                    string v = json.Substring(i, j - i);
+                    IPAddress tmp;
+                    if (IPAddress.TryParse(v, out tmp) && tmp.AddressFamily == AddressFamily.InterNetwork) return v;
+                    i = j;
+                }
+            }
+        }
+        catch { }
+        return null;
+    }
+
     private NetworkStream Dial(string host, int port)
     {
         IPAddress ip = null;
@@ -115,7 +148,13 @@ public class SplitProxy
                 }
                 if (ip == null && addrs.Length > 0) ip = addrs[0];
             }
-            catch { return null; }
+            catch { }
+        }
+        if (ip == null || IsFakeIp(ip))
+        {
+            string real = ResolveReal(host);
+            IPAddress parsed;
+            if (real != null && IPAddress.TryParse(real, out parsed)) ip = parsed;
         }
         if (ip == null) return null;
 
@@ -293,7 +332,7 @@ public class SplitProxy
 }
 '@
 
-Add-Type -TypeDefinition $code -Language CSharp
+Add-Type -TypeDefinition $code -Language CSharp -ReferencedAssemblies System.Net.Http
 
 function Get-LinkCandidates {
     $out = @()
