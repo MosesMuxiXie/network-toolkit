@@ -1,6 +1,6 @@
 # 并行网络工具箱
 
-Windows 上的两个本机网络工具，互不依赖，可单独开、单独关。
+两个本机网络工具，互不依赖，可单独开、单独关。提供 **Tauri 桌面版**（Windows / macOS）与原来的 PowerShell 脚本版。
 
 | 工具 | 解决什么 | 管理员 |
 | --- | --- | --- |
@@ -11,7 +11,46 @@ Windows 上的两个本机网络工具，互不依赖，可单独开、单独关
 
 ---
 
-## 安装
+## 桌面版（推荐）
+
+原生窗口，Windows 与 macOS 同一套界面。
+
+从 [Releases](https://github.com/rainy-rain/parallel-network-adaptors/releases) 下载对应平台的安装包：
+
+| 平台 | 文件 |
+| --- | --- |
+| Windows 10/11 x64 | `ParallelNetworkToolkit_*_x64-setup.exe`（NSIS）或 `.msi` |
+| macOS 11+ Apple Silicon | `ParallelNetworkToolkit_*_aarch64.dmg` |
+| macOS 11+ Intel | `ParallelNetworkToolkit_*_x64.dmg` |
+
+安装包自带运行所需的脚本，首次启动会把它们释放到应用数据目录；`caddy` 二进制由构建时打进包内（Windows 为 `caddy.exe`，macOS 为 `caddy`）。
+
+自己编译：
+
+```bash
+cd desktop
+pnpm install
+node node_modules/@tauri-apps/cli/tauri.js icon icon-source.png   # 仅首次
+pnpm tauri build
+```
+
+产物在 `desktop/src-tauri/target/release/bundle/`。
+
+**macOS 首次打开**：未签名/未公证的包会被 Gatekeeper 拦下，右键 →「打开」，或
+
+```bash
+xattr -dr com.apple.quarantine /Applications/ParallelNetworkToolkit.app
+```
+
+桌面版的「Steam 社区直连」在 macOS 上用的是 `SteamProxy.sh`：hosts 写入、根证书导入（`security add-trusted-cert`）、launchd 开机自启，逻辑与 Windows 版一一对应。
+
+---
+
+## 脚本版（Windows）
+
+适合不想装应用的场合，全部是纯 PowerShell，可直接读改。
+
+### 安装
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\installer\install.ps1
