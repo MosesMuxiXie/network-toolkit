@@ -76,8 +76,26 @@ fn ensure_scripts(app: &AppHandle) -> Result<PathBuf, String> {
         .resource_dir()
         .map_err(|e| format!("取资源目录失败：{e}"))?;
 
-    // Tauri 打包后 resources 可能位于 resource_dir 根或 resources/ 子目录
-    let candidates = [res.clone(), res.join("resources")];
+    // Tauri v2 的 NSIS 安装器把 resources 放在 <install>/_up_/resources，
+    // macOS 的 .app 在 Contents/Resources，dev 模式在 target/debug。
+    // 这里把常见落点全列出来，再补一层「resource_dir 下所有子目录」的兜底，
+    // 否则安装后脚本目录是空的，点任何按钮都会报「脚本缺失」。
+    let mut candidates: Vec<PathBuf> = vec![
+        res.clone(),
+        res.join("resources"),
+        res.join("_up_"),
+        res.join("_up_").join("resources"),
+        res.join("Resources"),
+    ];
+    if let Ok(rd) = std::fs::read_dir(&res) {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                candidates.push(p.join("resources"));
+                candidates.push(p.clone());
+            }
+        }
+    }
 
     let mut names: Vec<&str> = vec![
         "split-proxy.ps1",
@@ -98,16 +116,11 @@ fn ensure_scripts(app: &AppHandle) -> Result<PathBuf, String> {
 
     for name in names {
         let mut src: Option<PathBuf> = None;
-        let flat = res.join(name);
-        if flat.is_file() {
-            src = Some(flat);
-        } else {
-            for c in &candidates {
-                let p = c.join(name);
-                if p.is_file() {
-                    src = Some(p);
-                    break;
-                }
+        for c in &candidates {
+            let p = c.join(name);
+            if p.is_file() {
+                src = Some(p);
+                break;
             }
         }
         let Some(src) = src else { continue };
