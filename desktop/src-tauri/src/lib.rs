@@ -171,6 +171,18 @@ fn caddy_path(dir: &Path) -> PathBuf {
 
 // ==================== 统一执行入口 ====================
 
+/// Windows PowerShell 5.1 默认按系统 ANSI 写 stdout/stderr（中文机器是 GBK 936），
+/// 而这里一直按 UTF-8 读，于是「网关 / 度量 / 物理 / 出口」全变成乱码，
+/// parse_links 一条都解析不出来。先试 UTF-8，不合法再退回 GBK。
+fn decode_output(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            let (cow, _, _) = encoding_rs::GBK.decode(bytes);
+            cow.into_owned()
+        }
+    }
+}
 fn run_in(dir: &Path, program: &Path, args: &[&str], extra_env: &[(&str, &str)]) -> Result<String, String> {
     let mut cmd = Command::new(program);
     cmd.args(args).current_dir(dir);
@@ -192,8 +204,8 @@ fn run_in(dir: &Path, program: &Path, args: &[&str], extra_env: &[(&str, &str)])
         .output()
         .map_err(|e| format!("启动进程失败：{e}"))?;
 
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let stdout = decode_output(&out.stdout);
+    let stderr = decode_output(&out.stderr);
 
     if out.status.success() {
         Ok(if stderr.trim().is_empty() {
