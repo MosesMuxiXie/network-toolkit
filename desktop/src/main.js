@@ -5,6 +5,9 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 
 const isWindows = navigator.userAgent.includes("Windows");
 
+// 防重入锁：同一类状态查询同时只允许一个在跑（PowerShell 进程排队会让窗口假死）
+const inflight = new Set();
+
 // ==================== 日志 ====================
 
 function stamp() {
@@ -368,9 +371,27 @@ $$("[data-open-log]").forEach((b) =>
 );
 
 $("#btn-refresh-all").addEventListener("click", async () => {
-  await Promise.all([refreshSplit(), refreshCm(), refreshSteam()]);
+  await once("manual", async () => {
+    await refreshSplit();
+    await refreshCm();
+    await refreshSteam();
+  });
   status("状态已刷新");
 });
+
+// ==================== 防重入 ====================
+// 状态查询要起 PowerShell 进程（0.3~2s）。若上一次还没回来就再发一次，
+// 命令会排队堆积，界面表现为「未响应」。这里保证同一类查询同时只有一个在跑。
+
+async function once(key, fn) {
+  if (inflight.has(key)) return;
+  inflight.add(key);
+  try {
+    await fn();
+  } finally {
+    inflight.delete(key);
+  }
+}
 
 // ==================== 启动 ====================
 
@@ -383,8 +404,8 @@ $("#btn-refresh-all").addEventListener("click", async () => {
   await refreshSteam();
   status("就绪");
 
-  // 状态轮询
-  setInterval(refreshSplit, 5000);
-  setInterval(refreshCm, 8000);
-  setInterval(refreshSteam, 8000);
+  // 状态轮询：间隔拉长 + 防重入，避免 PowerShell 进程排队把界面拖死
+  setInterval(() => once("split", refreshSplit), 8000);
+  setInterval(() => once("cm", refreshCm), 15000);
+  setInterval(() => once("steam", refreshSteam), 15000);
 })();

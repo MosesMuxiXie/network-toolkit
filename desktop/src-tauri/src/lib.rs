@@ -332,7 +332,7 @@ fn yes(v: Option<&str>) -> bool {
 // ==================== 命令：平台信息 ====================
 
 #[tauri::command]
-fn platform_info(app: AppHandle) -> Result<PlatformInfo, String> {
+async fn platform_info(app: AppHandle) -> Result<PlatformInfo, String> {
     let dir = scripts_dir(&app)?;
     let caddy = caddy_path(&dir);
     let caddy_present = caddy.is_file()
@@ -353,7 +353,7 @@ fn platform_info(app: AppHandle) -> Result<PlatformInfo, String> {
 // ==================== 命令：链路 ====================
 
 #[tauri::command]
-fn list_links(app: AppHandle) -> Result<Vec<Link>, String> {
+async fn list_links(app: AppHandle) -> Result<Vec<Link>, String> {
     #[cfg(windows)]
     let raw = run_script(&app, "split-proxy.ps1", &["-List"])?;
     #[cfg(not(windows))]
@@ -363,7 +363,7 @@ fn list_links(app: AppHandle) -> Result<Vec<Link>, String> {
 }
 
 #[tauri::command]
-fn probe_links(app: AppHandle) -> Result<String, String> {
+async fn probe_links(app: AppHandle) -> Result<String, String> {
     #[cfg(windows)]
     {
         run_script(&app, "split-proxy.ps1", &["-SelfTest"])
@@ -410,7 +410,7 @@ fn find_split_pid() -> Option<u32> {
 }
 
 #[tauri::command]
-fn split_status(app: AppHandle) -> Result<SplitStatus, String> {
+async fn split_status(app: AppHandle) -> Result<SplitStatus, String> {
     let _ = app;
     let pid = find_split_pid();
     Ok(SplitStatus {
@@ -421,7 +421,7 @@ fn split_status(app: AppHandle) -> Result<SplitStatus, String> {
 }
 
 #[tauri::command]
-fn split_start(app: AppHandle, port: u16) -> Result<String, String> {
+async fn split_start(app: AppHandle, port: u16) -> Result<String, String> {
     if find_split_pid().is_some() {
         return Ok("分流器已在运行".to_string());
     }
@@ -468,7 +468,7 @@ fn split_start(app: AppHandle, port: u16) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn split_stop(app: AppHandle) -> Result<String, String> {
+async fn split_stop(app: AppHandle) -> Result<String, String> {
     let _ = app;
     let Some(pid) = find_split_pid() else {
         return Ok("分流器未在运行".to_string());
@@ -498,6 +498,7 @@ fn split_stop(app: AppHandle) -> Result<String, String> {
 // ==================== 命令：Steam 社区直连 ====================
 
 #[cfg(windows)]
+#[allow(dead_code)]
 fn port_listening(port: u16) -> bool {
     let out = Command::new("powershell.exe")
         .args([
@@ -517,6 +518,7 @@ fn port_listening(port: u16) -> bool {
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 fn port_listening(port: u16) -> bool {
     let out = Command::new("/usr/sbin/lsof")
         .args(["-nP", &format!("-iTCP:{}", port), "-sTCP:LISTEN"])
@@ -528,16 +530,23 @@ fn port_listening(port: u16) -> bool {
 }
 
 #[tauri::command]
-fn steam_status(app: AppHandle) -> Result<SteamStatus, String> {
-    let dir = ensure_scripts(&app)?;
+async fn steam_status(app: AppHandle) -> Result<SteamStatus, String> {
+    let _dir = ensure_scripts(&app)?;
 
-    let caddy = find_caddy_pid().is_some();
-    let p443 = port_listening(443);
-
+    // hosts 是纯文件读取，直接读，不起进程
     let hosts = read_hosts().unwrap_or_default();
     let hosts_ok = hosts.contains("steamcommunity.com") && hosts.contains("127.0.0.1");
 
-    let ca = ca_trusted(&dir);
+    // 进程 / 端口 / 根证书三项合并成一次 PowerShell，省掉两次 ~0.5s 的进程启动
+    #[cfg(windows)]
+    let (caddy, p443, ca) = steam_probe_all();
+
+    #[cfg(not(windows))]
+    let (caddy, p443, ca) = (
+        find_caddy_pid().is_some(),
+        port_listening(443),
+        ca_trusted(std::path::Path::new("")),
+    );
 
     Ok(SteamStatus {
         caddy,
@@ -548,7 +557,30 @@ fn steam_status(app: AppHandle) -> Result<SteamStatus, String> {
     })
 }
 
+/// 一次 PowerShell 取回三项状态，返回 (caddy 在跑, 443 在听, 根证书已装)
 #[cfg(windows)]
+fn steam_probe_all() -> (bool, bool, bool) {
+    let script = r#"$c=@(Get-Process -Name caddy -ErrorAction SilentlyContinue).Count -gt 0; $p=@(Get-NetTCPConnection -LocalPort 443 -State Listen -ErrorAction SilentlyContinue).Count -gt 0; $a=@(Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue | Where-Object { $_.Subject -like '*Caddy Local Authority*' }).Count -gt 0; Write-Output "$c $p $a""#;
+    let out = Command::new("powershell.exe")
+        .args(["-NoProfile", "-Command", script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+    match out {
+        Ok(o) => {
+            let s = String::from_utf8_lossy(&o.stdout);
+            let parts: Vec<&str> = s.split_whitespace().collect();
+            (
+                parts.first().map(|v| *v == "True").unwrap_or(false),
+                parts.get(1).map(|v| *v == "True").unwrap_or(false),
+                parts.get(2).map(|v| *v == "True").unwrap_or(false),
+            )
+        }
+        Err(_) => (false, false, false),
+    }
+}
+
+#[cfg(windows)]
+#[allow(dead_code)]
 fn find_caddy_pid() -> Option<u32> {
     let out = Command::new("powershell.exe")
         .args([
@@ -583,6 +615,7 @@ fn read_hosts() -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("读 hosts 失败：{e}"))
 }
 
+#[allow(dead_code)]
 fn ca_trusted(_dir: &Path) -> bool {
     #[cfg(windows)]
     {
@@ -607,7 +640,7 @@ fn ca_trusted(_dir: &Path) -> bool {
 }
 
 #[tauri::command]
-fn steam_enable(app: AppHandle) -> Result<String, String> {
+async fn steam_enable(app: AppHandle) -> Result<String, String> {
     #[cfg(windows)]
     {
         run_script(&app, "SteamProxy.ps1", &["-EnableQuiet"])
@@ -619,7 +652,7 @@ fn steam_enable(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn steam_disable(app: AppHandle) -> Result<String, String> {
+async fn steam_disable(app: AppHandle) -> Result<String, String> {
     #[cfg(windows)]
     {
         run_script(&app, "SteamProxy.ps1", &["-DisableQuiet"])
@@ -631,7 +664,7 @@ fn steam_disable(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn steam_test(app: AppHandle) -> Result<String, String> {
+async fn steam_test(app: AppHandle) -> Result<String, String> {
     #[cfg(windows)]
     {
         run_script(&app, "SteamProxy.ps1", &["-Test"])
@@ -662,7 +695,7 @@ fn parse_cm(output: &str) -> CmStatus {
 }
 
 #[tauri::command]
-fn cm_status(app: AppHandle) -> Result<CmStatus, String> {
+async fn cm_status(app: AppHandle) -> Result<CmStatus, String> {
     if !cfg!(windows) {
         return Ok(CmStatus { enabled: false, pid: 0, listeners: 0, dcs: 0, hosts: false });
     }
@@ -671,7 +704,7 @@ fn cm_status(app: AppHandle) -> Result<CmStatus, String> {
 }
 
 #[tauri::command]
-fn cm_enable(app: AppHandle) -> Result<String, String> {
+async fn cm_enable(app: AppHandle) -> Result<String, String> {
     if !cfg!(windows) {
         return Err("CM 直连中继目前仅支持 Windows".into());
     }
@@ -679,7 +712,7 @@ fn cm_enable(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn cm_disable(app: AppHandle) -> Result<String, String> {
+async fn cm_disable(app: AppHandle) -> Result<String, String> {
     if !cfg!(windows) {
         return Ok("已跳过（非 Windows）".into());
     }
@@ -687,14 +720,14 @@ fn cm_disable(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn cm_test(app: AppHandle) -> Result<String, String> {
+async fn cm_test(app: AppHandle) -> Result<String, String> {
     if !cfg!(windows) {
         return Err("CM 直连中继目前仅支持 Windows".into());
     }
     run_script(&app, "cm-splitter.ps1", &["-Action", "test"])
 }
 #[tauri::command]
-fn read_log(app: AppHandle, kind: String, tail: usize) -> Result<String, String> {
+async fn read_log(app: AppHandle, kind: String, tail: usize) -> Result<String, String> {
     let dir = ensure_scripts(&app)?;
     let name = match kind.as_str() {
         "split" => {
@@ -721,7 +754,7 @@ fn read_log(app: AppHandle, kind: String, tail: usize) -> Result<String, String>
 }
 
 #[tauri::command]
-fn open_path(app: AppHandle, kind: String) -> Result<(), String> {
+async fn open_path(app: AppHandle, kind: String) -> Result<(), String> {
     let dir = ensure_scripts(&app)?;
     #[cfg(windows)]
     {
@@ -757,7 +790,7 @@ fn open_path(app: AppHandle, kind: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn download_test(app: AppHandle, url: String, threads: u32, chunk_mb: u32) -> Result<String, String> {
+async fn download_test(app: AppHandle, url: String, threads: u32, chunk_mb: u32) -> Result<String, String> {
     #[cfg(windows)]
     {
         let t = threads.to_string();
