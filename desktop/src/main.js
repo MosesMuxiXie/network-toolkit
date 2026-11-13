@@ -14,7 +14,7 @@ function stamp() {
 }
 
 function log(pane, text, level = "") {
-  const el = pane === "steam" ? $("#log-steam") : $("#log-adapters");
+  const el = pane === "cm" ? $("#log-cm") : pane === "steam" ? $("#log-steam") : $("#log-adapters");
   const cls = level ? ` class="l-${level}"` : "";
   for (const line of String(text).split("\n")) {
     if (!line.trim()) continue;
@@ -238,6 +238,51 @@ async function steamAction(btn, cmd, arg, label) {
   }
 }
 
+// ==================== CM 直连中继 ====================
+
+function renderCm(c) {
+  const dot = $("#cm-dot");
+  if (c.enabled) {
+    dot.className = "dot on";
+    $("#cm-state").textContent = "中继运行中";
+    $("#cm-meta").textContent = "CM 流量经本机分片中继直连，不经过代理";
+  } else {
+    dot.className = "dot off";
+    $("#cm-state").textContent = "未开启";
+    $("#cm-meta").textContent = "TLS ClientHello 分片，绕过按段匹配的 DPI";
+  }
+  $("#cm-listeners").textContent = `监听 ${c.listeners}`;
+  $("#cm-dcs").textContent = `DC ${c.dcs}`;
+  $("#cm-hosts").textContent = c.hosts ? "hosts 已写入" : "hosts 未写入";
+  $("#cm-pid").textContent = c.pid ? `PID ${c.pid}` : "PID —";
+}
+
+async function refreshCm() {
+  try {
+    renderCm(await invoke("cm_status"));
+  } catch (_) {
+    /* 非 Windows 或尚未初始化，忽略 */
+  }
+}
+
+async function cmAction(btn, cmd, label) {
+  busy(btn, true);
+  status(`正在${label}…`);
+  log("cm", `--- ${label} ---`, "dim");
+  try {
+    const out = await invoke(cmd);
+    if (out && out.trim()) log("cm", out);
+    log("cm", `${label}完成`, "ok");
+    status(`${label}完成`);
+    await refreshCm();
+  } catch (e) {
+    log("cm", `${label}失败：${e}`, "err");
+    status(`${label}失败`);
+  } finally {
+    busy(btn, false);
+  }
+}
+
 // ==================== 日志 / 下载 ====================
 
 async function pullLog(kind) {
@@ -302,6 +347,18 @@ $("#btn-steam-test").addEventListener("click", (e) =>
   steamAction(e.currentTarget, "steam_test", undefined, "自检")
 );
 
+$("#btn-cm-enable").addEventListener("click", (e) =>
+  cmAction(e.currentTarget, "cm_enable", "开启 CM 直连")
+);
+$("#btn-cm-disable").addEventListener("click", (e) =>
+  cmAction(e.currentTarget, "cm_disable", "关闭 CM 直连")
+);
+$("#btn-cm-test").addEventListener("click", (e) =>
+  cmAction(e.currentTarget, "cm_test", "测速")
+);
+$("#btn-cm-log").addEventListener("click", () => openLog("cm"));
+$("#btn-clear-cm-log").addEventListener("click", () => ($("#log-cm").textContent = ""));
+
 $("#btn-steam-log").addEventListener("click", () => openLog("steam"));
 $("#btn-clear-log").addEventListener("click", () => ($("#log-adapters").textContent = ""));
 $("#btn-clear-steam-log").addEventListener("click", () => ($("#log-steam").textContent = ""));
@@ -311,7 +368,7 @@ $$("[data-open-log]").forEach((b) =>
 );
 
 $("#btn-refresh-all").addEventListener("click", async () => {
-  await Promise.all([refreshSplit(), refreshSteam()]);
+  await Promise.all([refreshSplit(), refreshCm(), refreshSteam()]);
   status("状态已刷新");
 });
 
@@ -322,10 +379,12 @@ $("#btn-refresh-all").addEventListener("click", async () => {
   await loadPlatform();
   await detectLinks($("#btn-detect"));
   await refreshSplit();
+  await refreshCm();
   await refreshSteam();
   status("就绪");
 
   // 状态轮询
   setInterval(refreshSplit, 5000);
+  setInterval(refreshCm, 8000);
   setInterval(refreshSteam, 8000);
 })();

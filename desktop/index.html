@@ -104,6 +104,54 @@
 
       <!-- ============ Steam 社区直连 ============ -->
       <section class="pane" id="pane-steam">
+        <!-- ---------- CM 直连中继 ---------- -->
+        <div class="cards">
+          <div class="card status-card">
+            <div class="card-label">CM 直连（不经过代理）</div>
+            <div class="status-line">
+              <span class="dot" id="cm-dot"></span>
+              <span id="cm-state">未知</span>
+            </div>
+            <div class="status-meta" id="cm-meta">TLS ClientHello 分片，绕过按段匹配的 DPI</div>
+          </div>
+          <div class="card status-card">
+            <div class="card-label">中继</div>
+            <ul class="mini-list">
+              <li><span id="cm-listeners">监听 0</span></li>
+              <li><span id="cm-dcs">DC 0</span></li>
+              <li><span id="cm-hosts">hosts —</span></li>
+              <li><span id="cm-pid">PID —</span></li>
+            </ul>
+          </div>
+          <div class="card status-card hint-card">
+            <div class="card-label">为什么不用代理</div>
+            <p class="hint-text">
+              DPI 只在<b>单个 TCP 段</b>内匹配 ClientHello，不做流重组。把首包切成
+              20 字节的小段发出去即可通过，比走代理快一个数量级。
+            </p>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <button class="btn primary" id="btn-cm-enable">开启 CM 直连</button>
+          <button class="btn" id="btn-cm-disable">关闭</button>
+          <button class="btn" id="btn-cm-test">测速</button>
+          <button class="btn" id="btn-cm-log">打开日志</button>
+        </div>
+
+        <div class="log-panel">
+          <div class="log-head">
+            <span>CM 中继输出</span>
+            <div class="log-actions">
+              <button class="link-btn" id="btn-clear-cm-log">清空</button>
+            </div>
+          </div>
+          <pre class="log" id="log-cm"></pre>
+        </div>
+
+        <hr class="sep" />
+
+        <!-- ---------- Steam 社区直连 ---------- -->
         <div class="cards">
           <div class="card status-card">
             <div class="card-label">总状态</div>

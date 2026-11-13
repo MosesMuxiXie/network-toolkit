@@ -38,6 +38,15 @@ pub struct SplitStatus {
 }
 
 #[derive(Serialize, Clone, Debug)]
+pub struct CmStatus {
+    pub enabled: bool,
+    pub pid: u32,
+    pub listeners: u32,
+    pub dcs: u32,
+    pub hosts: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
 pub struct SteamStatus {
     pub caddy: bool,
     pub hosts: bool,
@@ -78,6 +87,8 @@ fn ensure_scripts(app: &AppHandle) -> Result<PathBuf, String> {
         "split-proxy.py",
         "multi-fetch.sh",
         "SteamProxy.sh",
+        "cm-splitter.ps1",
+        "CmSplitter.cs",
     ];
     // caddy 二进制随包分发，运行时释放到脚本目录
     #[cfg(windows)]
@@ -633,6 +644,55 @@ fn steam_test(app: AppHandle) -> Result<String, String> {
 
 // ==================== 命令：日志与下载 ====================
 
+fn parse_cm(output: &str) -> CmStatus {
+    let get = |k: &str| -> Option<String> {
+        let prefix = format!("{k}=");
+        output
+            .lines()
+            .find(|l| l.starts_with(&prefix))
+            .map(|l| l[prefix.len()..].trim().to_string())
+    };
+    CmStatus {
+        enabled: get("CM_ENABLED").map(|v| v == "1").unwrap_or(false),
+        pid: get("CM_PID").and_then(|v| v.parse().ok()).unwrap_or(0),
+        listeners: get("CM_LISTENERS").and_then(|v| v.parse().ok()).unwrap_or(0),
+        dcs: get("CM_DC").and_then(|v| v.parse().ok()).unwrap_or(0),
+        hosts: get("CM_HOSTS").map(|v| v == "1").unwrap_or(false),
+    }
+}
+
+#[tauri::command]
+fn cm_status(app: AppHandle) -> Result<CmStatus, String> {
+    if !cfg!(windows) {
+        return Ok(CmStatus { enabled: false, pid: 0, listeners: 0, dcs: 0, hosts: false });
+    }
+    let out = run_script(&app, "cm-splitter.ps1", &["-Action", "status"])?;
+    Ok(parse_cm(&out))
+}
+
+#[tauri::command]
+fn cm_enable(app: AppHandle) -> Result<String, String> {
+    if !cfg!(windows) {
+        return Err("CM 直连中继目前仅支持 Windows".into());
+    }
+    run_script(&app, "cm-splitter.ps1", &["-Action", "enable"])
+}
+
+#[tauri::command]
+fn cm_disable(app: AppHandle) -> Result<String, String> {
+    if !cfg!(windows) {
+        return Ok("已跳过（非 Windows）".into());
+    }
+    run_script(&app, "cm-splitter.ps1", &["-Action", "disable"])
+}
+
+#[tauri::command]
+fn cm_test(app: AppHandle) -> Result<String, String> {
+    if !cfg!(windows) {
+        return Err("CM 直连中继目前仅支持 Windows".into());
+    }
+    run_script(&app, "cm-splitter.ps1", &["-Action", "test"])
+}
 #[tauri::command]
 fn read_log(app: AppHandle, kind: String, tail: usize) -> Result<String, String> {
     let dir = ensure_scripts(&app)?;
@@ -647,6 +707,7 @@ fn read_log(app: AppHandle, kind: String, tail: usize) -> Result<String, String>
                 String::from("split-proxy.log")
             }
         }
+        "cm" => String::from("cm-splitter.log"),
         _ => String::from("access.log"),
     };
     let p = dir.join(&name);
@@ -667,6 +728,7 @@ fn open_path(app: AppHandle, kind: String) -> Result<(), String> {
         let target = match kind.as_str() {
             "dir" => dir.clone(),
             "split" => dir.join("split-proxy.log"),
+            "cm" => dir.join("cm-splitter.log"),
             _ => dir.join("access.log"),
         };
         let target = if target.exists() {
@@ -738,7 +800,11 @@ pub fn run() {
             read_log,
             open_path,
             download_test,
-        ])
+        cm_status,
+        cm_enable,
+        cm_disable,
+        cm_test,
+    ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");
 }

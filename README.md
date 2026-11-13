@@ -293,6 +293,83 @@ SNI 未封：真实 IP 23.15.140.216，HTTP 200，TLS 握手成功 0.268s
 
 ---
 
+## 工具三：Steam CM 直连（TLS 分片）
+
+Steam 底部状态栏显示 **NO CONNECTION**，库里能看、头像能显示，但好友和聊天一直掉线。这不是商店或社区的问题，是 **CM（连接管理器）** 连不上。
+
+### 原理
+
+Steam 的 CM 走自己的 TCP 协议（27015–27036 端口，WebSocket 走 443），**不读系统代理**（注册表 `HKCU\Software\Valve\Steam` 的 `ProxyMode` 是空的），所以 Clash 之类设了系统代理也管不到它。
+
+实测该网络对 CM 的处理是：**TCP 三次握手放行，ClientHello 一发出去就回 RST**。24 个 CM 域名 × 23 个端口 = 552 个组合，TLS 成功 0 个；但同一批 IP 的 80 端口明文 HTTP 是 404 正常。也就是说封的是 **TLS 握手**，不是 IP 也不是端口。
+
+关键发现：**这台网络的 DPI 不做 TCP 流重组**，只在单个 TCP 段内匹配 ClientHello 的特征。于是把首包切开分几次发出去就能过：
+
+| 每段字节 | 段间延迟 | 结果 |
+|---|---|---|
+| 1 | 30 ms | OK（TLS 1.2 握手成功）|
+| 3 | 10 ms | OK |
+| 10 | 5 ms | OK |
+| 50 | 2 ms | OK |
+| 1000（不分片）| 0 | **RST** |
+
+所以不需要任何代理：本机起一个转发器，把 Steam 发给 CM 的字节切成 20 字节一段、间隔 3 ms 写出去，CM 回来的数据原样转发。全程走本地回环，**不经过任何境外节点**。
+
+### 结构
+
+- `cm-splitter.ps1` — 启停、状态、测速，并维护 hosts
+- `CmSplitter.cs` — 转发器本体（`TcpListener` + 分片写 + 双向 `Pump`）
+- 24 个 CM 域名指向 `127.0.0.2`–`127.0.0.25`，每个 IP 上监听 22 个端口（27015–27036），共 **528 个监听**
+- hosts 里由 `# === SteamCM BEGIN ===` / `# === SteamCM END ===` 包住的那一段，关闭时整段删除
+
+### 用法
+
+桌面版：Steam 标签页顶部的「CM 直连中继」卡片 → **开启**。
+
+命令行：
+
+```powershell
+# 开启（起转发器 + 写 hosts + 刷新 DNS 缓存）
+powershell -ExecutionPolicy Bypass -File cm-splitter.ps1 -Action enable
+
+# 看状态
+powershell -ExecutionPolicy Bypass -File cm-splitter.ps1 -Action status
+
+# 测速（4 个 DC）
+powershell -ExecutionPolicy Bypass -File cm-splitter.ps1 -Action test
+
+# 关闭（停转发器 + 清 hosts）
+powershell -ExecutionPolicy Bypass -File cm-splitter.ps1 -Action disable
+```
+
+`status` 输出 `KEY=VALUE` 五行：`CM_ENABLED` / `CM_PID` / `CM_LISTENERS` / `CM_DC` / `CM_HOSTS`。
+
+### 实测
+
+```
+CM_ENABLED=1  CM_PID=23100  CM_LISTENERS=528  CM_DC=24  CM_HOSTS=1
+
+cmp1-hkg1  403  0.414s   （含 TLS 握手）
+cmp2-hkg1  403  0.400s
+cmp1-sgp1  403  0.760s
+```
+
+同一条 `cmp1-hkg1:27018` 走 SOCKS5 代理要 3.47 s，分片中继 **0.41 s**，快 8 倍，而且不消耗节点流量。
+
+Steam 侧日志确认：
+
+```
+ConnectionCompleted() (127.0.0.2:27020, WebSocket)
+[Connected, 4, 7] Logging on [U:1:...]
+[Logged On, 4, 7] processing complete
+```
+
+### 已知限制
+
+- 仅 Windows。macOS 上这个卡片会提示不支持。
+- 24 个 DC 里约 18 个可用；`cmp1/2-tyo3`、`ext1/2-bom2`、`ext1/2-maa2` 是 IP 本身路由不通，不是 DPI 问题。
+- 需要 528 个监听端口，防火墙弹窗要允许。
+- 开过 UU 加速器后它可能改写 hosts，重新点一次「开启」即可覆盖回来。
 ## 目录结构
 
 ```
@@ -305,6 +382,8 @@ SNI 未封：真实 IP 23.15.140.216，HTTP 200，TLS 握手成功 0.268s
 ├── gui/
 │   ├── Launcher.ps1         工具箱启动器
 │   └── AdaptersGUI.ps1      双链路并行 图形界面
+├── cm-splitter.ps1        # CM 直连中继（启停 / 状态 / 测速）
+├── CmSplitter.cs          # 分片转发器本体
 ├── steam-community/
 │   ├── SteamProxy.ps1       Steam 社区直连 图形界面
 │   └── Caddyfile            反代规则
