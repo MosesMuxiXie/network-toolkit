@@ -644,9 +644,10 @@ fn read_hosts() -> Result<String, String> {
 }
 
 #[allow(dead_code)]
-fn ca_trusted(_dir: &Path) -> bool {
+fn ca_trusted(dir: &Path) -> bool {
     #[cfg(windows)]
     {
+        let _ = dir;
         let out = Command::new("powershell.exe")
             .args([
                 "-NoProfile",
