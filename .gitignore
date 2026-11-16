@@ -22,3 +22,9 @@ desktop/src-tauri/gen/
 
 # 图标源文件（由 icon-source.png 生成后不再需要）
 desktop/icon-source.png
+# P2P 直连运行时产物（脚本同目录生成，不入库）
+desktop/resources/tools/
+desktop/resources/relay/
+desktop/resources/p2p-*.json
+desktop/resources/p2p-*.log
+desktop/resources/*.err

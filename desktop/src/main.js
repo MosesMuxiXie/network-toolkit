@@ -16,8 +16,17 @@ function stamp() {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+// 日志面板：每个功能一页，按 pane 名路由到各自的 <pre>
+const LOG_PANES = {
+  adapters: "#log-adapters",
+  cm: "#log-cm",
+  steam: "#log-steam",
+  p2p: "#log-p2p",
+};
+
 function log(pane, text, level = "") {
-  const el = pane === "cm" ? $("#log-cm") : pane === "steam" ? $("#log-steam") : $("#log-adapters");
+  const el = $(LOG_PANES[pane] || "#log-adapters");
+  if (!el) return;
   const cls = level ? ` class="l-${level}"` : "";
   for (const line of String(text).split("\n")) {
     if (!line.trim()) continue;
@@ -332,6 +341,278 @@ async function runDownload(btn) {
   }
 }
 
+// ==================== P2P 直连 ====================
+
+// p2p-ctl.ps1 的 status 输出是纯 KEY=VALUE 文本，在这里解析成对象
+function parseKv(text) {
+  const out = {};
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const m = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
+    if (m) out[m[1]] = m[2].trim();
+  }
+  return out;
+}
+
+const HOLE_TEXT = {
+  idle: "未启用",
+  waiting: "等待对端",
+  punching: "正在打洞",
+  connected: "已连通",
+  error: "出错",
+};
+const RELAY_TEXT = {
+  idle: "未启用",
+  connecting: "连接中",
+  connected: "已连接",
+  closed: "已断开",
+  error: "出错",
+};
+const TUNNEL_TEXT = {
+  idle: "未启用",
+  starting: "启动中",
+  running: "已启动",
+  connected: "已连通",
+  stopped: "已停止",
+  error: "出错",
+};
+
+// 三种状态 → 三种点：已连通=绿、进行中=黄闪、未启用=灰、出错=红
+function dotFor(dot, state, live) {
+  if (!dot) return;
+  if (state === "error") dot.className = "dot err";
+  else if (live.includes(state)) dot.className = "dot on";
+  else if (state === "idle" || state === "closed" || state === "stopped" || !state)
+    dot.className = "dot off";
+  else dot.className = "dot busy";
+}
+
+function renderP2p(kv) {
+  const nat = kv.HOLE_NAT || "";
+  $("#p2p-nat").textContent = nat === "symmetric" ? "对称（symmetric）" : nat === "cone" ? "锥形（cone）" : "—";
+
+  // A
+  const hs = kv.HOLE_STATE || "idle";
+  dotFor($("#hole-dot"), hs, ["connected"]);
+  $("#hole-state").textContent = HOLE_TEXT[hs] || hs;
+  const rtt = Number(kv.HOLE_RTT || 0);
+  $("#hole-meta").textContent =
+    `NAT ${nat || "—"} · 延迟 ${rtt ? rtt + " ms" : "—"} · 收 ${kv.HOLE_RX || 0} / 发 ${kv.HOLE_TX || 0}`;
+
+  if (kv.HOLE_INVITE) {
+    const detail = kv.HOLE_MAPPING ? `本机映射 ${kv.HOLE_MAPPING}` : "本机映射未知";
+    $("#hole-invite").textContent = `邀请码 ${kv.HOLE_INVITE} · ${detail} · 端口 ${kv.HOLE_PORT || "—"}`;
+  } else {
+    $("#hole-invite").textContent =
+      kv.HOLE_ERROR ? `邀请码 — · 错误：${kv.HOLE_ERROR}` : "邀请码 —";
+  }
+
+  // B
+  const rs = kv.RELAY_STATE || "idle";
+  dotFor($("#relay-dot"), rs, ["connected"]);
+  $("#relay-state").textContent = RELAY_TEXT[rs] || rs;
+  $("#relay-meta").textContent =
+    `房间 ${kv.RELAY_ROOM || "—"} · 对端 ${kv.RELAY_PEERS || 0} · 收 ${kv.RELAY_RX || 0} / 发 ${kv.RELAY_TX || 0}`;
+
+  // 账号状态：wrangler 装没装、有没有授权，直接决定 B 能不能用
+  const cfLogin = kv.CF_LOGIN === "yes";
+  const cfWrangler = kv.CF_WRANGLER === "yes";
+  const acct = $("#relay-account");
+  if (cfLogin) {
+    acct.textContent = `账号 已连接 Cloudflare${kv.CF_WORKER ? ` · Worker ${kv.CF_WORKER}` : " · 还没部署 Worker"}`;
+  } else {
+    acct.textContent = `账号 未连接 · 点启动会自动打开浏览器授权${cfWrangler ? "" : "（本机还没有 wrangler，会先装）"}`;
+  }
+  // 一键部署成功后把地址回填到输入框，用户不用复制粘贴
+  const workerInput = $("#relay-worker");
+  if (kv.CF_WORKER && !workerInput.value) workerInput.value = kv.CF_WORKER;
+
+  // C
+  const ts = kv.TUNNEL_STATE || "idle";
+  dotFor($("#tunnel-dot"), ts, ["running", "connected"]);
+  $("#tunnel-state").textContent = TUNNEL_TEXT[ts] || ts;
+  $("#tunnel-meta").textContent = kv.TUNNEL_PUBLIC
+    ? `公网地址 ${kv.TUNNEL_PUBLIC}`
+    : kv.TUNNEL_ERROR
+    ? `公网地址 — · 错误：${kv.TUNNEL_ERROR}`
+    : "公网地址 —";
+  $("#tunnel-public").textContent = kv.TUNNEL_PUBLIC ? `公网地址 ${kv.TUNNEL_PUBLIC}` : "公网地址 —";
+}
+
+async function refreshP2p() {
+  try {
+    renderP2p(parseKv(await invoke("p2p_status")));
+  } catch (e) {
+    log("p2p", `状态读取失败：${e}`, "err");
+  }
+}
+
+// 三通道的开关都走同一个命令，只是 action 不同。
+// stateKey 用来看动作结束后通道是不是进了 error —— 否则按钮失败了界面还说「完成」。
+async function p2pAction(btn, action, extra, label, stateKey) {
+  busy(btn, true);
+  status(`正在${label}…`);
+  log("p2p", `--- ${label} ---`, "dim");
+  try {
+    const out = await invoke("p2p_run", { action, ...(extra || {}) });
+    if (out && out.trim()) log("p2p", out);
+    const kv = parseKv(await invoke("p2p_status"));
+    renderP2p(kv);
+    if (stateKey && kv[stateKey] === "error") {
+      const err = kv[stateKey.replace("_STATE", "_ERROR")] || "未说明原因";
+      log("p2p", `${label}失败：${err}`, "err");
+      status(`${label}失败`);
+    } else {
+      log("p2p", `${label}完成`, "ok");
+      status(`${label}完成`);
+    }
+  } catch (e) {
+    log("p2p", `${label}失败：${e}`, "err");
+    status(`${label}失败`);
+    await refreshP2p();
+  } finally {
+    busy(btn, false);
+  }
+}
+
+function holeArgs() {
+  return {
+    port: Number($("#hole-port").value) || 26999,
+    peer: $("#hole-peer").value.trim(),
+    spray: Number($("#hole-spray").value),
+    localUdp: Number($("#hole-local-udp").value) || 0,
+    peerUdp: Number($("#hole-peer-udp").value) || 0,
+  };
+}
+
+// 诊断：问 STUN + 测中继可达性，约 10–20 秒
+async function p2pProbe(btn) {
+  busy(btn, true);
+  status("正在做网络诊断…");
+  log("p2p", "--- 网络诊断 ---", "dim");
+  try {
+    const out = await invoke("p2p_probe");
+    log("p2p", out);
+    status("诊断完成");
+    await refreshP2p();
+  } catch (e) {
+    log("p2p", `诊断失败：${e}`, "err");
+    status("诊断失败");
+  } finally {
+    busy(btn, false);
+  }
+}
+
+async function copyInvite(btn) {
+  busy(btn, true);
+  try {
+    const kv = parseKv(await invoke("p2p_status"));
+    const inv = kv.HOLE_INVITE;
+    if (!inv) {
+      log("p2p", "还没有邀请码：先点「启动」，等 A 通道拿到本机映射。", "warn");
+      status("暂无邀请码");
+      return;
+    }
+    // 邀请码就是 base64("公网IP:端口|本地端口")，解出来给人看
+    let decoded = "";
+    try {
+      decoded = atob(inv);
+    } catch (_) {
+      /* 解不开就只给原文 */
+    }
+    const text = decoded ? `${inv}（${decoded}）` : inv;
+    try {
+      await navigator.clipboard.writeText(inv);
+      log("p2p", `邀请码已复制：${text}`, "ok");
+      status("邀请码已复制");
+    } catch (_) {
+      log("p2p", `邀请码：${text}`, "dim");
+      status("复制失败，已打印到日志");
+    }
+  } catch (e) {
+    log("p2p", `读取邀请码失败：${e}`, "err");
+  } finally {
+    busy(btn, false);
+  }
+}
+
+async function showWorkerCode(btn) {
+  busy(btn, true);
+  log("p2p", "--- B 通道部署说明 ---", "dim");
+  try {
+    const out = await invoke("p2p_worker");
+    log("p2p", out);
+    status("已打印部署说明");
+  } catch (e) {
+    log("p2p", `读取失败：${e}`, "err");
+  } finally {
+    busy(btn, false);
+  }
+}
+
+async function listTunnels(btn) {
+  busy(btn, true);
+  status("正在检测本机隧道工具…");
+  log("p2p", "--- 隧道工具检测 ---", "dim");
+  try {
+    const out = await invoke("p2p_tunnels");
+    log("p2p", out);
+    status("检测完成");
+  } catch (e) {
+    log("p2p", `检测失败：${e}`, "err");
+    status("检测失败");
+  } finally {
+    busy(btn, false);
+  }
+}
+
+// 手动触发 bore 的下载安装：不等用户点启动，也能先把工具备齐
+async function installBore(btn) {
+  busy(btn, true);
+  status("正在安装 bore…");
+  log("p2p", "--- 安装 bore ---", "dim");
+  try {
+    const out = await invoke("p2p_run", { action: "tunnel-install", provider: "bore" });
+    if (out && out.trim()) log("p2p", out);
+    log("p2p", "bore 安装完成", "ok");
+    status("bore 安装完成");
+    await listTunnelsSilent();
+  } catch (e) {
+    log("p2p", `安装 bore 失败：${e}`, "err");
+    status("安装 bore 失败");
+  } finally {
+    busy(btn, false);
+  }
+}
+
+async function listTunnelsSilent() {
+  try {
+    log("p2p", await invoke("p2p_tunnels"));
+  } catch (_) {
+    /* 静默 */
+  }
+}
+
+// Cloudflare 登录 / 部署：都不是通道开关，动作完只要刷新状态即可
+async function cfAction(btn, action, label) {
+  busy(btn, true);
+  status(`正在${label}…`);
+  log("p2p", `--- ${label} ---`, "dim");
+  try {
+    const out = await invoke("p2p_run", { action });
+    if (out && out.trim()) log("p2p", out);
+    // 授权/部署都可能要等一会儿，刷新一次看新状态
+    await refreshP2p();
+    log("p2p", `${label}完成`, "ok");
+    status(`${label}完成`);
+  } catch (e) {
+    log("p2p", `${label}失败：${e}`, "err");
+    status(`${label}失败`);
+    await refreshP2p();
+  } finally {
+    busy(btn, false);
+  }
+}
+
 // ==================== 事件绑定 ====================
 
 $("#btn-detect").addEventListener("click", (e) => detectLinks(e.currentTarget));
@@ -365,6 +646,72 @@ $("#btn-clear-cm-log").addEventListener("click", () => ($("#log-cm").textContent
 $("#btn-steam-log").addEventListener("click", () => openLog("steam"));
 $("#btn-clear-log").addEventListener("click", () => ($("#log-adapters").textContent = ""));
 $("#btn-clear-steam-log").addEventListener("click", () => ($("#log-steam").textContent = ""));
+$("#btn-clear-p2p-log").addEventListener("click", () => ($("#log-p2p").textContent = ""));
+
+// ---------- P2P 直连 ----------
+$("#btn-p2p-probe").addEventListener("click", (e) => p2pProbe(e.currentTarget));
+$("#btn-p2p-refresh").addEventListener("click", (e) => {
+  busy(e.currentTarget, true);
+  once("p2p-manual", async () => {
+    await refreshP2p();
+    status("P2P 状态已刷新");
+  }).finally(() => busy(e.currentTarget, false));
+});
+$("#btn-p2p-dir").addEventListener("click", () => openLog("dir"));
+
+// A · UDP 打洞
+$("#btn-hole-start").addEventListener("click", (e) =>
+  p2pAction(e.currentTarget, "hole-start", holeArgs(), "启动 A 通道", "HOLE_STATE")
+);
+$("#btn-hole-stop").addEventListener("click", (e) =>
+  p2pAction(e.currentTarget, "hole-stop", {}, "停止 A 通道", "HOLE_STATE")
+);
+$("#btn-hole-copy").addEventListener("click", (e) => copyInvite(e.currentTarget));
+
+// B · Cloudflare 中继
+$("#btn-relay-start").addEventListener("click", (e) => {
+  const worker = $("#relay-worker").value.trim();
+  // 没填 Worker 也放行：后端会先看账号——没连 Cloudflare 就自动把浏览器拉起来，
+  // 已连则提示去点「一键部署」。在这里拦下来反而让用户不知道下一步该干什么。
+  p2pAction(
+    e.currentTarget,
+    "relay-start",
+    { worker, room: $("#relay-room").value.trim() },
+    "启动 B 通道",
+    "RELAY_STATE"
+  );
+});
+$("#btn-relay-stop").addEventListener("click", (e) =>
+  p2pAction(e.currentTarget, "relay-stop", {}, "停止 B 通道", "RELAY_STATE")
+);
+$("#btn-relay-worker").addEventListener("click", (e) => showWorkerCode(e.currentTarget));
+
+// C · 免费 TCP 隧道
+$("#btn-tunnel-start").addEventListener("click", (e) =>
+  p2pAction(
+    e.currentTarget,
+    "tunnel-start",
+    {
+      provider: $("#tunnel-provider").value,
+      localPort: Number($("#tunnel-local-port").value) || 25565,
+    },
+    "启动 C 通道",
+    "TUNNEL_STATE"
+  )
+);
+$("#btn-tunnel-stop").addEventListener("click", (e) =>
+  p2pAction(e.currentTarget, "tunnel-stop", {}, "停止 C 通道", "TUNNEL_STATE")
+);
+$("#btn-tunnel-list").addEventListener("click", (e) => listTunnels(e.currentTarget));
+$("#btn-tunnel-install").addEventListener("click", (e) => installBore(e.currentTarget));
+
+// B · Cloudflare 账号
+$("#btn-cf-login").addEventListener("click", (e) =>
+  cfAction(e.currentTarget, "cf-login", "登录 Cloudflare")
+);
+$("#btn-cf-deploy").addEventListener("click", (e) =>
+  cfAction(e.currentTarget, "cf-deploy", "部署 Worker")
+);
 
 $$("[data-open-log]").forEach((b) =>
   b.addEventListener("click", () => openLog(b.dataset.openLog))
@@ -375,6 +722,7 @@ $("#btn-refresh-all").addEventListener("click", async () => {
     await refreshSplit();
     await refreshCm();
     await refreshSteam();
+    await refreshP2p();
   });
   status("状态已刷新");
 });
@@ -402,10 +750,13 @@ async function once(key, fn) {
   await refreshSplit();
   await refreshCm();
   await refreshSteam();
+  await refreshP2p();
   status("就绪");
 
   // 状态轮询：间隔拉长 + 防重入，避免 PowerShell 进程排队把界面拖死
   setInterval(() => once("split", refreshSplit), 8000);
   setInterval(() => once("cm", refreshCm), 15000);
   setInterval(() => once("steam", refreshSteam), 15000);
+  // P2P 三条通道的变化比别的快（打洞几秒内就可能连通），轮询密一点
+  setInterval(() => once("p2p", refreshP2p), 4000);
 })();

@@ -25,6 +25,7 @@
     <nav class="tabs">
       <button class="tab active" data-tab="adapters">双链路并行</button>
       <button class="tab" data-tab="steam">Steam 社区直连</button>
+      <button class="tab" data-tab="p2p">P2P 直连</button>
     </nav>
 
     <main class="content">
@@ -194,6 +195,142 @@
             </div>
           </div>
           <pre class="log" id="log-steam"></pre>
+        </div>
+      </section>
+
+      <!-- ============ P2P 直连 ============ -->
+      <section class="pane" id="pane-p2p">
+        <!-- ---------- 三通道开关状态 ---------- -->
+        <div class="cards">
+          <div class="card status-card">
+            <div class="card-label">A · UDP 打洞</div>
+            <div class="status-line">
+              <span class="dot" id="hole-dot"></span>
+              <span id="hole-state">未启用</span>
+            </div>
+            <div class="status-meta" id="hole-meta">NAT — · 延迟 — · 收 0 / 发 0</div>
+          </div>
+          <div class="card status-card">
+            <div class="card-label">B · Cloudflare 中继</div>
+            <div class="status-line">
+              <span class="dot" id="relay-dot"></span>
+              <span id="relay-state">未启用</span>
+            </div>
+            <div class="status-meta" id="relay-meta">房间 — · 对端 0 · 收 0 / 发 0</div>
+          </div>
+          <div class="card status-card">
+            <div class="card-label">C · 免费 TCP 隧道</div>
+            <div class="status-line">
+              <span class="dot" id="tunnel-dot"></span>
+              <span id="tunnel-state">未启用</span>
+            </div>
+            <div class="status-meta" id="tunnel-meta">公网地址 —</div>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <button class="btn primary" id="btn-p2p-probe" title="问两个 STUN 服务器拿自己的公网映射，判断 NAT 类型与端口是否可预测，并测一轮中继/隧道工具的可达性。">网络诊断</button>
+          <button class="btn" id="btn-p2p-refresh" title="读三个通道的状态文件，不起进程。">刷新状态</button>
+          <button class="btn" id="btn-p2p-dir" title="打开日志与状态文件所在目录。">打开日志目录</button>
+          <span class="spacer"></span>
+          <span class="inline-field">NAT <b id="p2p-nat">—</b></span>
+        </div>
+
+        <hr class="sep" />
+
+        <!-- ---------- A：UDP 打洞 ---------- -->
+        <div class="p2p-block">
+          <div class="p2p-head">
+            <span class="p2p-title">A · UDP 打洞</span>
+            <span class="p2p-desc">零成本、不限流量。两端各自往外打，命中后走直连。一方留空等待、另一方填邀请码即可。</span>
+          </div>
+          <div class="toolbar">
+            <label class="inline-field">本地端口
+              <input type="number" id="hole-port" value="26999" min="1024" max="65535" title="本地 UDP 监听端口。两端一致更容易命中。" />
+            </label>
+            <label class="inline-field wide">对端
+              <input type="text" id="hole-peer" placeholder="1.2.3.4:5678（留空＝只听）" title="对方的公网地址:端口。对端是对方的邀请码解出来的地址，或它自己报的映射地址。" />
+            </label>
+            <label class="inline-field">喷射
+              <input type="number" id="hole-spray" value="64" min="0" max="512" title="对称 NAT 下对方的真实端口会在预测值附近漂移，这里向其上下各扫多少个端口。0＝只打精确端口。" />
+            </label>
+            <button class="btn primary" id="btn-hole-start">启动</button>
+            <button class="btn" id="btn-hole-stop">停止</button>
+            <button class="btn" id="btn-hole-copy" title="把本机公网映射地址编成一段邀请码，发给对方填到「对端」。">复制邀请码</button>
+          </div>
+          <div class="toolbar">
+            <label class="inline-field">本地 UDP
+              <input type="number" id="hole-local-udp" value="0" min="0" max="65535" title="本机要监听的 UDP 端口。填了才开转发，0＝不开。" />
+            </label>
+            <label class="inline-field">对端 UDP
+              <input type="number" id="hole-peer-udp" value="0" min="0" max="65535" title="对端本地要投递的 UDP 端口。" />
+            </label>
+            <span class="dim">两个都填才开端口转发，例：基岩版 19132 → 19132</span>
+          </div>
+          <div class="status-meta" id="hole-invite">邀请码 —</div>
+        </div>
+
+        <hr class="sep" />
+
+        <!-- ---------- B：Cloudflare 中继 ---------- -->
+        <div class="p2p-block">
+          <div class="p2p-head">
+            <span class="p2p-title">B · Cloudflare 中继</span>
+            <span class="p2p-desc">免费 Worker 做房间中继。两端都在校园网内、A 打不通时走这条，也绕开境外 DERP 的 300ms。</span>
+          </div>
+          <div class="toolbar">
+            <label class="inline-field wide">Worker
+              <input type="text" id="relay-worker" placeholder="wss://p2p-relay.<子域>.workers.dev" title="自己 wrangler deploy 出来的 Worker 地址，或别人给你的。带不带 wss:// 都可以。" />
+            </label>
+            <label class="inline-field">房间
+              <input type="text" id="relay-room" placeholder="留空自动生成" title="同一个房间名的连接互为对端。把房间号发给对方即可。" />
+            </label>
+            <button class="btn primary" id="btn-relay-start">启动</button>
+            <button class="btn" id="btn-relay-stop">停止</button>
+            <button class="btn" id="btn-cf-login" title="没连 Cloudflare 账号时，启动会自己弹出浏览器授权；这里可以手动重来一次。">登录 Cloudflare</button>
+            <button class="btn" id="btn-cf-deploy" title="用 wrangler 把 Worker 部署到你自己的账号，成功后自动填进 Worker 一栏。">一键部署</button>
+            <button class="btn" id="btn-relay-worker" title="打印需要部署到 Cloudflare 的 Worker 源码。">部署说明</button>
+          </div>
+          <div class="status-meta" id="relay-account">账号 —</div>
+        </div>
+
+        <hr class="sep" />
+
+        <!-- ---------- C：免费 TCP 隧道 ---------- -->
+        <div class="p2p-block">
+          <div class="p2p-head">
+            <span class="p2p-title">C · 免费 TCP 隧道</span>
+            <span class="p2p-desc">把本机一个 TCP 端口暴露到公网。只解决单端口（如 Minecraft 25565），不做局域网发现、拿不到 445 这类特权端口。</span>
+          </div>
+          <div class="toolbar">
+            <label class="inline-field">服务商
+              <select id="tunnel-provider" title="bore 免注册，没装会自动下载；其余需要先注册账号。">
+                <option value="bore">bore（免注册，自动安装）</option>
+                <option value="cpolar">cpolar（国内最快）</option>
+                <option value="ngrok">ngrok</option>
+                <option value="cloudflared">cloudflared</option>
+                <option value="frpc">frpc</option>
+              </select>
+            </label>
+            <label class="inline-field">本地端口
+              <input type="number" id="tunnel-local-port" value="25565" min="1" max="65535" title="要暴露的本机端口。" />
+            </label>
+            <button class="btn primary" id="btn-tunnel-start" title="缺 bore 时自动下载到脚本目录的 tools\ 下再启动。">启动</button>
+            <button class="btn" id="btn-tunnel-stop">停止</button>
+            <button class="btn" id="btn-tunnel-list">检测已装工具</button>
+            <button class="btn" id="btn-tunnel-install" title="手动触发 bore 的下载安装（约 660 KB）。">安装 bore</button>
+          </div>
+          <div class="status-meta" id="tunnel-public">公网地址 —</div>
+        </div>
+
+        <div class="log-panel">
+          <div class="log-head">
+            <span>输出</span>
+            <div class="log-actions">
+              <button class="link-btn" id="btn-clear-p2p-log" title="清空这一页的日志文字。">清空</button>
+            </div>
+          </div>
+          <pre class="log" id="log-p2p"></pre>
         </div>
       </section>
     </main>

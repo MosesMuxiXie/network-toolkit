@@ -107,6 +107,9 @@ fn ensure_scripts(app: &AppHandle) -> Result<PathBuf, String> {
         "SteamProxy.sh",
         "cm-splitter.ps1",
         "CmSplitter.cs",
+        "p2p-ctl.ps1",
+        "p2p-worker.js",
+        "wrangler.toml",
     ];
     // caddy 二进制随包分发，运行时释放到脚本目录
     #[cfg(windows)]
@@ -839,6 +842,140 @@ async fn download_test(app: AppHandle, url: String, threads: u32, chunk_mb: u32)
     }
 }
 
+// ==================== 命令：P2P 直连 ====================
+
+/// 统一调用 p2p-ctl.ps1。所有开关参数都是可选的，只把给了的拼进命令行。
+/// 输出是 `KEY=VALUE` 形式的纯文本，由前端解析，Rust 侧不关心字段含义。
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn p2p_call(
+    app: &AppHandle,
+    action: &str,
+    peer: Option<String>,
+    port: Option<u16>,
+    spray: Option<u16>,
+    local_udp: Option<u16>,
+    peer_udp: Option<u16>,
+    worker: Option<String>,
+    room: Option<String>,
+    provider: Option<String>,
+    local_port: Option<u16>,
+) -> Result<String, String> {
+    let mut owned: Vec<String> = vec!["-Action".to_string(), action.to_string()];
+
+    let mut push_num = |flag: &str, v: Option<u16>| {
+        if let Some(n) = v {
+            owned.push(flag.to_string());
+            owned.push(n.to_string());
+        }
+    };
+    push_num("-Port", port);
+    push_num("-Spray", spray);
+    push_num("-LocalUdp", local_udp);
+    push_num("-PeerUdp", peer_udp);
+    push_num("-LocalPort", local_port);
+
+    let mut push_text = |flag: &str, v: Option<String>| {
+        if let Some(s) = v {
+            let t = s.trim().to_string();
+            if !t.is_empty() {
+                owned.push(flag.to_string());
+                owned.push(t);
+            }
+        }
+    };
+    push_text("-Peer", peer);
+    push_text("-Worker", worker);
+    push_text("-Room", room);
+    push_text("-Provider", provider);
+
+    let refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+    run_script(app, "p2p-ctl.ps1", &refs)
+}
+
+#[tauri::command]
+async fn p2p_status(app: AppHandle) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        p2p_call(&app, "status", None, None, None, None, None, None, None, None, None)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Ok(String::new())
+    }
+}
+
+/// 问 STUN 拿公网映射 + 判断 NAT 类型 + 测中继可达性。约 10–20 秒。
+#[tauri::command]
+async fn p2p_probe(app: AppHandle) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        p2p_call(&app, "probe", None, None, None, None, None, None, None, None, None)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Err("P2P 直连目前仅支持 Windows".into())
+    }
+}
+
+#[tauri::command]
+async fn p2p_tunnels(app: AppHandle) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        p2p_call(&app, "tunnel-list", None, None, None, None, None, None, None, None, None)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Err("P2P 直连目前仅支持 Windows".into())
+    }
+}
+
+#[tauri::command]
+async fn p2p_worker(app: AppHandle) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        p2p_call(&app, "worker-code", None, None, None, None, None, None, None, None, None)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Err("P2P 直连目前仅支持 Windows".into())
+    }
+}
+
+/// 三通道的开关统一走这里：action ∈ hole-start / hole-stop / relay-start /
+/// relay-stop / tunnel-start / tunnel-stop / status / probe / tunnel-list
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn p2p_run(
+    app: AppHandle,
+    action: String,
+    peer: Option<String>,
+    port: Option<u16>,
+    spray: Option<u16>,
+    local_udp: Option<u16>,
+    peer_udp: Option<u16>,
+    worker: Option<String>,
+    room: Option<String>,
+    provider: Option<String>,
+    local_port: Option<u16>,
+) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        p2p_call(
+            &app, &action, peer, port, spray, local_udp, peer_udp, worker, room, provider, local_port,
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (&app, action, peer, port, spray, local_udp, peer_udp, worker, room, provider, local_port);
+        Err("P2P 直连目前仅支持 Windows".into())
+    }
+}
+
 // ==================== 入口 ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -862,6 +999,11 @@ pub fn run() {
         cm_enable,
         cm_disable,
         cm_test,
+        p2p_status,
+        p2p_probe,
+        p2p_tunnels,
+        p2p_worker,
+        p2p_run,
     ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");
