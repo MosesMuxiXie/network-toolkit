@@ -80,14 +80,12 @@ jobs:
         working-directory: desktop/resources
         run: |
           ARCH=$([[ "${{ matrix.args }}" == *"aarch64"* ]] && echo "arm64" || echo "amd64")
+          # caddyserver 的 download 接口直接返回二进制（不再打包成 zip），与 Windows 一致
           curl -L --fail --retry 3 --connect-timeout 30 \
-            -o caddy.zip "https://caddyserver.com/api/download?os=darwin&arch=${ARCH}"
-          unzip -o caddy.zip -d caddy-bin
-          rm -f caddy.zip
-          find caddy-bin -type f -name 'caddy*' -exec mv {} ./caddy \;
-          rm -rf caddy-bin
+            -o caddy "https://caddyserver.com/api/download?os=darwin&arch=${ARCH}"
           chmod +x caddy
           ls -lh caddy
+          file caddy
 
       - name: Build Tauri app
         working-directory: desktop
