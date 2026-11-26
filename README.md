@@ -125,7 +125,7 @@ Steam 底部显示 NO CONNECTION、好友与聊天掉线 —— 这是 CM 连不
 
 | 控件 | 作用 |
 |---|---|
-| **开启 CM 直连** | 起中继（24 个 DC × 22 端口 = **528 个本地监听**）→ 写 hosts → 刷 DNS 缓存。**约 17 秒**。完成后要**彻底退出 Steam 再启动**（托盘右键退出，不是关窗口） |
+| **开启 CM 直连** | 起中继（24 个 DC × 22 端口 = **528 个本地监听**）→ 写 hosts → 刷 DNS 缓存。**约 17 秒**；非管理员运行时会弹一次 **UAC** 授权（只写 hosts 那一步提权）。完成后要**彻底退出 Steam 再启动**（托盘右键退出，不是关窗口） |
 | **关闭 CM 直连** | 停中继 → 从 hosts 删掉 CM 那一段 → 完全恢复原状 |
 | **测速** | 对 4 个 DC 各做一次 TLS 握手，验证分片是否真的绕过了 DPI，报出握手耗时 |
 | **打开日志** | 中继日志，每次连接一行（accept / tunnel up / 对端 IP） |
@@ -447,7 +447,31 @@ powershell -ExecutionPolicy Bypass -File cm-splitter.ps1 -Action test
 powershell -ExecutionPolicy Bypass -File cm-splitter.ps1 -Action disable
 ```
 
-`status` 输出 `KEY=VALUE` 五行：`CM_ENABLED` / `CM_PID` / `CM_LISTENERS` / `CM_DC` / `CM_HOSTS`。
+`status` 输出 `KEY=VALUE`：
+
+```
+CM_ENABLED=1            # 中继在跑且有监听
+CM_PID=23100
+CM_LISTENERS=528
+CM_DC=24
+CM_HOSTS=1              # hosts 里 CM 段与当前 DC 表一致
+CM_HOSTS_ADMIN=1        # 当前进程是否管理员
+CM_HOSTS_STALE=1        # 仅在「块在但内容过期」时出现
+CM_HOSTS_ERR=...        # 仅在写入失败时出现，带失败原因
+CM_HOSTS_HINT=...       # 仅在需要用户动作时出现（例如「会弹一次 UAC」）
+```
+
+前五行是稳定接口（桌面端按它渲染），后四行是给人看的原因码。
+
+### hosts 写入要管理员权限
+
+`hosts` 的 ACL 是 `Users: 读`、`Administrators: 完全控制`，所以**任何**用户态的写都会失败——早期版本把异常吞掉，界面只显示「hosts 未写入」，中继却在跑（`CM_LISTENERS=528`），看起来「开了但没效果」。现在：
+
+1. 先在当前进程试写（有的机器 Users 组被额外放权）；
+2. 写不进去且是桌面端 / `enable` 调用时，用 `Start-Process -Verb RunAs` 只把「写 hosts」这一步提到管理员，**中继本身仍以普通权限运行**；
+3. 弹窗被点「否」按错误 1223 上报，界面状态栏和 CM 日志都会写明「hosts 未写入——CM 直连不生效」；
+4. 已经是目标状态就跳过写入（幂等），不会每次开启都弹 UAC；
+5. 写入前把原文件备份成脚本目录下的 `hosts.bak.yyyyMMdd-HHmmss`（保留最近 5 个），写完回读校验；只增删 `# === SteamCM BEGIN/END ===` 这一段，其它行（包括 UU 加速器写的段）逐字节保留。
 
 ### 实测
 
@@ -472,6 +496,8 @@ ConnectionCompleted() (127.0.0.2:27020, WebSocket)
 ### 已知限制
 
 - 仅 Windows。macOS 上这个卡片会提示不支持。
+- 写 hosts 需要管理员：桌面端会在开启时弹一次 UAC，命令行直接跑 `-Action enable` 时若当前不是管理员，同样会弹一次。点「否」的后果是**中继在跑但 hosts 没写**，此时 `CM_HOSTS=0` + `CM_HOSTS_ERR` 会说明原因，界面状态栏也会变成「hosts 未写入——CM 直连不生效」。
+- `CM_HOSTS=0` 时 `-Action test` 会全 `FAIL:000`：域名还指着真 CM，TLS 直连被 DPI 掐掉。所以「测速全失败」先看 `CM_HOSTS`，不是 DC 挂了。
 - 24 个 DC 里约 18 个可用；`cmp1/2-tyo3`、`ext1/2-bom2`、`ext1/2-maa2` 是 IP 本身路由不通，不是 DPI 问题。
 - 需要 528 个监听端口，防火墙弹窗要允许。
 - 开过 UU 加速器后它可能改写 hosts，重新点一次「开启」即可覆盖回来。

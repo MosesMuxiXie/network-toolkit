@@ -44,6 +44,12 @@ pub struct CmStatus {
     pub listeners: u32,
     pub dcs: u32,
     pub hosts: bool,
+    /// hosts 写入失败的原因（空串表示没出错）
+    pub hosts_error: String,
+    /// 块存在但内容与当前 DC 表不一致（升级后旧块残留）
+    pub hosts_stale: bool,
+    /// 当前进程是否有管理员权限
+    pub hosts_admin: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -129,12 +135,28 @@ fn ensure_scripts(app: &AppHandle) -> Result<PathBuf, String> {
         let Some(src) = src else { continue };
         let target = dst.join(name);
 
+        // 判断是否需要覆盖：以内容为准，不能只看 mtime。
+        // 升级安装时 resources 里的脚本 mtime 可能比 app_data 里的旧
+        // （NSIS 保留归档时间戳、上一版是手动改过、系统时钟回拨……），
+        // 只看 mtime 会让旧版本的 cm-splitter.ps1 永久留在用户机器上，
+        // 于是修好的 hosts 逻辑根本不会生效——这正是 1.1.0 的真实故障形态。
+        // caddy 是外部二进制，体积大且升级不需要校验，仍按 mtime。
+        let is_binary = name == "caddy.exe" || name == "caddy";
         let need_copy = match (std::fs::metadata(&src), std::fs::metadata(&target)) {
-            (Ok(a), Ok(b)) => match (a.modified().ok(), b.modified().ok()) {
-                (Some(ta), Some(tb)) => ta > tb,
-                _ => true,
-            },
             (Ok(_), Err(_)) => true,
+            (Ok(a), Ok(b)) => {
+                if is_binary {
+                    match (a.modified().ok(), b.modified().ok()) {
+                        (Some(ta), Some(tb)) => ta > tb || a.len() != b.len(),
+                        _ => true,
+                    }
+                } else {
+                    match (std::fs::read(&src), std::fs::read(&target)) {
+                        (Ok(x), Ok(y)) => x != y,
+                        _ => true,
+                    }
+                }
+            }
             _ => false,
         };
 
@@ -720,13 +742,25 @@ fn parse_cm(output: &str) -> CmStatus {
         listeners: get("CM_LISTENERS").and_then(|v| v.parse().ok()).unwrap_or(0),
         dcs: get("CM_DC").and_then(|v| v.parse().ok()).unwrap_or(0),
         hosts: get("CM_HOSTS").map(|v| v == "1").unwrap_or(false),
+        hosts_error: get("CM_HOSTS_ERR").unwrap_or_default(),
+        hosts_stale: get("CM_HOSTS_STALE").map(|v| v == "1").unwrap_or(false),
+        hosts_admin: get("CM_HOSTS_ADMIN").map(|v| v == "1").unwrap_or(false),
     }
 }
 
 #[tauri::command]
 async fn cm_status(app: AppHandle) -> Result<CmStatus, String> {
     if !cfg!(windows) {
-        return Ok(CmStatus { enabled: false, pid: 0, listeners: 0, dcs: 0, hosts: false });
+        return Ok(CmStatus {
+            enabled: false,
+            pid: 0,
+            listeners: 0,
+            dcs: 0,
+            hosts: false,
+            hosts_error: String::new(),
+            hosts_stale: false,
+            hosts_admin: false,
+        });
     }
     let out = run_script(&app, "cm-splitter.ps1", &["-Action", "status"])?;
     Ok(parse_cm(&out))

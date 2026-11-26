@@ -252,6 +252,9 @@ async function steamAction(btn, cmd, arg, label) {
 
 // ==================== CM 直连中继 ====================
 
+// refreshCm 每 15 秒轮询一次，同一个报错只记一次，避免刷屏
+let lastHostsErr = "";
+
 function renderCm(c) {
   const dot = $("#cm-dot");
   if (c.enabled) {
@@ -265,15 +268,41 @@ function renderCm(c) {
   }
   $("#cm-listeners").textContent = `监听 ${c.listeners}`;
   $("#cm-dcs").textContent = `DC ${c.dcs}`;
-  $("#cm-hosts").textContent = c.hosts ? "hosts 已写入" : "hosts 未写入";
+  const hostsEl = $("#cm-hosts");
+  if (c.hosts && c.hosts_stale) {
+    hostsEl.textContent = "hosts 已过期";
+    hostsEl.title = "hosts 里的 SteamCM 段与当前 DC 表不一致，重新开启即可刷新";
+  } else if (c.hosts) {
+    hostsEl.textContent = "hosts 已写入";
+    hostsEl.title = "hosts 指向本机 127.0.0.2–127.0.0.25";
+  } else {
+    // 未写入必须给出可执行的原因，否则用户只会看到一行「hosts 未写入」无从下手
+    hostsEl.textContent = "hosts 未写入";
+    const why = [];
+    if (c.hosts_error) why.push(c.hosts_error);
+    if (!c.hosts_admin) why.push("当前进程非管理员：写入 hosts 会弹一次 UAC 授权（点「是」）");
+    if (!c.enabled) why.push("中继未运行：先点「开启 CM 直连」");
+    hostsEl.title = why.length ? why.join("\n") : "点「开启 CM 直连」写入 hosts";
+  }
   $("#cm-pid").textContent = c.pid ? `PID ${c.pid}` : "PID —";
+  if (c.hosts_error) {
+    if (c.hosts_error !== lastHostsErr) {
+      lastHostsErr = c.hosts_error;
+      log("cm", `hosts 写入失败：${c.hosts_error}`, "err");
+    }
+  } else {
+    lastHostsErr = "";
+  }
 }
 
 async function refreshCm() {
   try {
-    renderCm(await invoke("cm_status"));
+    const st = await invoke("cm_status");
+    renderCm(st);
+    return st;
   } catch (_) {
     /* 非 Windows 或尚未初始化，忽略 */
+    return null;
   }
 }
 
@@ -284,9 +313,17 @@ async function cmAction(btn, cmd, label) {
   try {
     const out = await invoke(cmd);
     if (out && out.trim()) log("cm", out);
-    log("cm", `${label}完成`, "ok");
-    status(`${label}完成`);
-    await refreshCm();
+    const st = await refreshCm();
+    // 起中继成功但 hosts 没写进去，是「看起来正常、实际一点效果没有」的静默失败，
+    // 必须在状态栏和日志里都说清楚，不能让「完成」把它盖过去。
+    if (cmd === "cm_enable" && st && st.enabled && !st.hosts) {
+      const why = st.hosts_error || (st.hosts_admin ? "未知原因" : "需要管理员权限（UAC 被拒绝或未弹出）");
+      log("cm", `中继已启动，但 hosts 未写入：${why}`, "err");
+      status(`${label}完成，但 hosts 未写入——CM 直连不生效`);
+    } else {
+      log("cm", `${label}完成`, "ok");
+      status(`${label}完成`);
+    }
   } catch (e) {
     log("cm", `${label}失败：${e}`, "err");
     status(`${label}失败`);

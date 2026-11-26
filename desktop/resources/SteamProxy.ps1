@@ -3,7 +3,9 @@
 param(
     [switch]$Test,
     [switch]$EnableQuiet,
-    [switch]$DisableQuiet
+    [switch]$DisableQuiet,
+    # 内部开关：提权子进程带它启动，用来保证「只提权一次」
+    [switch]$AsAdmin
 )
 <#
   Steam 社区直连工具 (SteamProxy)
@@ -17,15 +19,56 @@ param(
 #>
 
 # ==================== 自提权 ====================
+# 桌面端会用 -EnableQuiet / -DisableQuiet / -Test 调本脚本，这几个开关都要写 hosts
+# 或改证书，非管理员一定失败。提权时必须把这些开关一起带过去，否则提权后的那份
+# 会退化成「开个 GUI 等人点」，而原来那份已经 exit 0 —— 桌面端拿不到任何输出，
+# 用户看到的是「点了没反应，然后莫名多个窗口」。
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+$isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin -and $AsAdmin) {
+    # 提权子进程仍然不是管理员：说明这次 runas 被系统默默降权了（UAC 关闭时的
+    # 受限令牌、安全软件拦截等）。再拉一次就是无限自我复制的进程炸弹，直接失败。
+    [Console]::Error.WriteLine("提权未生效：子进程仍不是管理员，已停止，避免反复自启动")
+    exit 2
+}
+if (-not $isAdmin) {
+    # 参数是从 $PSBoundParameters 重建的：有了 param() 和 [CmdletBinding()] 之后
+    # $args 里只剩没被声明的多余参数，直接用它会一个开关都带不过去。
+    $passArgs = ''
+    foreach ($kv in $PSBoundParameters.GetEnumerator()) {
+        $name = '-' + $kv.Key
+        $val = $kv.Value
+        if ($val -is [System.Management.Automation.SwitchParameter]) {
+            if ($val.IsPresent) { $passArgs += ' ' + $name }
+        } elseif ($null -ne $val -and "$val" -ne '') {
+            $s = [string]$val
+            if ($s -match '[\s"]') { $passArgs += ' ' + $name + ' "' + ($s -replace '"', '\"') + '"' }
+            else { $passArgs += ' ' + $name + ' ' + $s }
+        }
+    }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell.exe"
-    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" + $passArgs + ' -AsAdmin'
     $psi.Verb = "runas"
     $psi.UseShellExecute = $true
-    try { [System.Diagnostics.Process]::Start($psi) | Out-Null } catch { }
-    exit
+    try {
+        $p = [System.Diagnostics.Process]::Start($psi)
+        if (-not ($Test -or $EnableQuiet -or $DisableQuiet)) {
+            # 双击启动的 GUI 模式：提权后的那份就是用户要的窗口，父进程没必要陪着
+            exit 0
+        }
+        $p.WaitForExit()
+        # 提权子进程的输出走它自己的控制台，桌面端抓不到；把失败写在父进程的 stdout 上，
+        # 才能落到「CM/Steam 日志」面板里让人看见原因。
+        if ($p.ExitCode -ne 0) {
+            Write-Output ('STEAM_ERR=提权子进程退出码 ' + $p.ExitCode + '（UAC 被拒绝，或提权没有真正生效）')
+        }
+        exit $p.ExitCode
+    } catch {
+        # 典型是用户在 UAC 上点了「否」（1223）
+        Write-Output ('STEAM_ERR=提权失败：' + $_.Exception.Message)
+        exit 1
+    }
 }
 
 Add-Type -AssemblyName System.Windows.Forms

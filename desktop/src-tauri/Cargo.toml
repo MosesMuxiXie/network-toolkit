@@ -1,6 +1,6 @@
 [package]
 name = "parallel-network-toolkit"
-version = "1.1.0"
+version = "1.1.1"
 description = "并行网络工具箱 — 双链路分流 + Steam 社区直连"
 authors = ["Mo_XI"]
 license = "MIT"
